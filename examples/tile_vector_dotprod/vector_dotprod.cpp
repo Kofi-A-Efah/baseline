@@ -33,7 +33,7 @@
 // 
 // NOTE: 3 * WIDTH <= 4KB, the size of DMEM on the tile.
 
-#include "vector_multiply.hpp"
+#include "vector_dotprod.hpp"
 
 // Matrix sizes:
 #define A_WIDTH  128
@@ -42,40 +42,15 @@
 #define NUM_ITER 1
 #define FLOAT_TAG 1
 
-// Host Vector Addition code (to compare results)
-template <typename TA, typename TB, typename TC>
-void vector_multiply (TA *A, TB *B, TC *C, uint64_t N) {
-        uint64_t i;
-        for (i = 0; i+5 < N; i += 5) {
-                float a0 = A[i];
-                float a1 = A[i+1];
-                float a2 = A[i+2];
-                float a3 = A[i+3];
-                float a4 = A[i+4];
-
-                float b0 = B[i];
-                float b1 = B[i+1];
-                float b2 = B[i+2];
-                float b3 = B[i+3];
-                float b4 = B[i+4];
-
-                float product = a0 * b0;
-                float product1 = a1 * b1;
-                float product2 = a2 * b2;
-                float product3 = a3 * b3;
-                float product4 = a4 * b4;
-
-                C[i] = product;
-                C[i+1] = product1;
-                C[i+2] = product2;
-                C[i+3] = product3;
-                C[i+4] = product4;
+// Host Vector Dot Product code (to compare results)
+template <typename TA, typename TB>
+void vector_dotprod (TA *A, TB *B, uint64_t N) {
+        float C = 0;
+        for (uint64_t x = 0; x < N; x ++) {
+                C = C + A[x] * B[x];
         }
-        for(i; i < N; i++) {
-                C[i] = A[i] * B[i];
-        }
+        return;
 }
-
 
 // Compute the sum of squared error between vectors A and B (M x N)
 template <typename T>
@@ -91,7 +66,7 @@ double vector_sse (const T *A, const T *B, uint64_t N) {
         return sum;
 }
 
-// Run a Vector Addition test on the Manycore, and compare the result.
+// Run a Vector Dor Product test on the Manycore, and compare the result.
 // A and B are the input vectors, C is the destination, and gold is
 // the known-good result computed by the host.
 template<typename TA, typename TB, typename TC>
@@ -176,8 +151,8 @@ int run_test(hb_mc_device_t &device, const char* kernel,
         bsg_pr_test_info(BSG_GREEN("Vector Match.\n"));
 }
 
-// Run a series of Vector Addition tests on the Manycore device
-int kernel_vector_multiply (int argc, char **argv) {
+// Run a series of Vector Dot Product tests on the Manycore device
+int kernel_vector_dotprod (int argc, char **argv) {
         int rc;
         char *bin_path, *test_name;
         struct arguments_path args = {NULL, NULL};
@@ -186,7 +161,7 @@ int kernel_vector_multiply (int argc, char **argv) {
         bin_path = args.path;
         test_name = args.name;
 
-        bsg_pr_test_info("Running CUDA Single-tile Vector Multiplication.\n");
+        bsg_pr_test_info("Running CUDA Single-tile Vector Dot Product.\n");
 
         // Define tg_dim_x/y: number of tiles in each tile group
         // Define block_size_x/y: amount of work each tile group should do
@@ -209,14 +184,14 @@ int kernel_vector_multiply (int argc, char **argv) {
         // Allocate A, B, C and R (result) on the host for each datatype.
         float A[A_WIDTH];
         float B[B_WIDTH];
-        float C[C_WIDTH];
-        float R[C_WIDTH];
+        float C;
+        float R;
         
         // Generate random numbers. Since the Manycore can't handle infinities,
         // subnormal numbers, or NANs, filter those out.
         auto res = distribution(generator);
 
-        for (uint64_t i = 0; i < A_WIDTH; i ++) {
+        for (uint64_t i = 0; i < A_WIDTH; i++) {
                 do{
                         res = distribution(generator);
                 }while(!std::isnormal(res) ||
@@ -224,12 +199,6 @@ int kernel_vector_multiply (int argc, char **argv) {
                        std::isnan(res));
 
                 A[i] = static_cast<float>(res);
-                A[i + 1] = static_cast<float>(res);
-                A[i + 2] = static_cast<float>(res);
-                A[i + 3] = static_cast<float>(res);
-                A[i + 4] = static_cast<float>(res);
-
-
         }
 
         for (uint64_t i = 0; i < B_WIDTH; i++) {
@@ -240,14 +209,10 @@ int kernel_vector_multiply (int argc, char **argv) {
                        std::isnan(res));
 
                 B[i] = static_cast<float>(res);
-                B[i + 1] = static_cast<float>(res);
-                B[i + 2] = static_cast<float>(res);
-                B[i + 3] = static_cast<float>(res);
-                B[i + 4] = static_cast<float>(res);
         }
 
         // Generate the known-correct results on the host
-        vector_multiply (A, B, R, A_WIDTH);
+        vector_dotprod (A, B, A_WIDTH);
 
         // Initialize device, load binary and unfreeze tiles.
         hb_mc_device_t device;
@@ -295,7 +260,7 @@ int kernel_vector_multiply (int argc, char **argv) {
         }
 
         // Run the 32-bit floating-point test and check the result
-        rc = run_test(device, "kernel_vector_multiply_float",
+        rc = run_test(device, "kernel_vector_dotprod_float",
                       A, B, C, R,
                       A_device, B_device, C_device,
                       tg_dim, grid_dim, block_size, FLOAT_TAG);
@@ -329,14 +294,14 @@ void cosim_main(uint32_t *exit_code, char * args) {
         scope = svGetScopeFromName("tb");
         svSetScope(scope);
 
-        int rc = kernel_vector_multiply(argc, argv);
+        int rc = kernel_vector_dotprod(argc, argv);
         *exit_code = rc;
         bsg_pr_test_pass_fail(rc == HB_MC_SUCCESS);
         return;
 }
 #else
 int main(int argc, char ** argv) {
-        int rc = kernel_vector_multiply(argc, argv);
+        int rc = kernel_vector_dotprod(argc, argv);
         bsg_pr_test_pass_fail(rc == HB_MC_SUCCESS);
         return rc;
 }
